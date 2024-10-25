@@ -1,0 +1,504 @@
+{
+  "exerciseList": [
+    {
+      "exercise": "One",
+      "name": "One for the fast",
+      "description": "Randomly through ports",
+      "fullDescription": "Forth and back under one port on time",
+      "outline":
+        {
+          "orientation": "Landscape",
+          "width": 1920,
+          "height": 1080,
+          "elements": [
+            {
+              "type": "Port",
+              "id": 1,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 500,
+              "y": 500,
+              "rotation": 0
+            }
+          ]
+        },
+      "elements": [
+        {
+          "type": "Port",
+          "minVersion": 1.0,
+          "minNumber": 1,
+          "maxNumber": 1
+        }
+      ],
+      "taskList": [
+        {
+          "seq": 1,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "taskType":"Ctrl",
+          "type": "Repeat",
+          "seq": 1
+        }
+      ],
+      "endCondition": {
+        "type": "countSolved",
+        "condition": 10
+      },
+      "parameters": [
+        {
+          "name": "endCondition",
+          "paramType": "App",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 1,
+              "maxValue": 100
+            }
+          ]
+        },
+        {
+          "name": "silent",
+          "paramType": "Port",
+          "type": "Bool",
+          "validValues": [
+            {
+              "type": "Bool",
+              "Value": "True"
+            },
+            {
+              "type": "Bool",
+              "Value": "False"
+            }
+          ]
+        },
+        {
+          "name": "test",
+          "paramType": "Port",
+          "type": "Bool",
+          "validValues": [
+            {
+              "type": "Bool",
+              "Value": "True"
+            },
+            {
+              "type": "Bool",
+              "Value": "False"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "exercise": "Two",
+      "name": "One for the fast",
+      "description": "Randomly through ports",
+      "fullDescription": "Two Ports, side by side",
+      "outline": 
+        {
+          "orientation": "Portrait",
+          "width": 1440,
+          "height": 2960,
+          "elements": [
+            {
+              "type": "Port",
+              "id": "1",
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 500,
+              "y": 500,
+              "rotation": 0
+            }
+          ]
+        },
+      "elements": [
+        {
+          "type": "Port",
+          "minVersion": "1.0",
+          "minNumber": "2",
+          "maxNumber": "2"
+        }
+      ],
+      "taskList": [
+        {
+          "seq": 1,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "seq": 2,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "taskType":"Ctrl",
+          "type": "Repeat",
+          "seq": 1
+        }
+      ],
+      "endCondition": {
+        "type": "countSolved",
+        "condition": 10
+      },
+      "parameters": [
+        {
+          "name": "endCondition",
+          "paramType": "App",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 10000,
+              "maxValue": 120000
+            }
+          ]
+        },
+        {
+          "name": "silent",
+          "paramType": "Port",
+          "type": "Bool",
+          "validValues": [
+            {
+              "type": "Bool",
+              "Value": "True"
+            },
+            {
+              "type": "Bool",
+              "Value": "False"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "exercise": "Horseshoe",
+      "name": "Horseshoe",
+      "description": "Randomly through ports",
+      "fullDescription": "The classic",
+      "outline": 
+        {
+          "orientation": "Portrait",
+          "width": 1440,
+          "height": 2960,
+          "elements": [
+            {
+              "type": "Port",
+              "id": 1,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 500,
+              "y": 500,
+              "rotation": 1
+            },
+            {
+              "type": "Port",
+              "id": 2,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 600,
+              "y": 400,
+              "rotation": 0
+            },
+            {
+              "type": "Port",
+              "id": 3,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 920,
+              "y": 500,
+              "rotation": 1
+            }
+          ]
+        },
+      "elements": [
+        {
+          "type": "Port",
+          "minVersion": "1.0",
+          "minNumber": "1",
+          "maxNumber": "1"
+        }
+      ],
+      "taskList": [
+        {
+          "seq": 1,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "seq": 2,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "seq": 3,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "taskType":"Ctrl",
+          "type": "Repeat",
+          "seq": 1
+        }
+      ],
+      "endCondition": {
+        "type": "countSolved",
+        "condition": 10
+      },
+      "parameters": [
+        {
+          "name": "endCondition",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 10000,
+              "maxValue": 120000
+            }
+          ]
+        },
+        {
+          "name": "timeout",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 1000,
+              "maxValue": 10000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "exercise": "HorseRand",
+      "name": "Horseshoe random",
+      "description": "Randomly through ports",
+      "fullDescription": "The classic",
+      "outline": 
+        {
+          "orientation": "Portrait",
+          "width": 1440,
+          "height": 2960,
+          "elements": [
+            {
+              "type": "Port",
+              "id": 1,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 500,
+              "y": 500,
+              "rotation": 180
+            },
+            {
+              "type": "Port",
+              "id": 2,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 600,
+              "y": 400,
+              "rotation": 90
+            },
+            {
+              "type": "Port",
+              "id": 3,
+              "shape": {
+                "type": "Rectangle",
+                "width": 300,
+                "height": 80
+              },
+              "x": 920,
+              "y": 500,
+              "rotation": 180
+            }
+          ]
+        },
+      "elements": [
+        {
+          "type": "Port",
+          "minVersion": "1.0",
+          "minNumber": "1",
+          "maxNumber": "1"
+        }
+      ],
+      "taskList": [
+        {
+          "seq": 99,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "taskType":"Ctrl",
+          "type": "Repeat",
+          "seq": 1
+        }
+      ],
+      "endCondition": {
+        "type": "countSolved",
+        "condition": 10
+      },
+      "parameters": [
+        {
+          "name": "endCondition",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 10,
+              "maxValue": 1000
+            }
+          ]
+        },
+        {
+          "name": "timeout",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 1000,
+              "maxValue": 10000
+            }
+          ]
+        }
+      ]
+    },    {
+      "exercise": "HorseRan5",
+      "name": "Horseshoe random",
+      "description": "Randomly through ports",
+      "fullDescription": "The classic",
+      "outline": 
+        {
+          "layoutType": "Rel",
+          "elements": [
+            {
+              "type": "Port",
+              "id": 1,
+              "rotation": 0
+            },
+            {
+              "type": "Port",
+              "id": 2,
+              "rotation": 45
+            },
+            {
+              "type": "Port",
+              "id": 3,
+              "rotation": 45
+            },
+            {
+              "type": "Port",
+              "id": 4,
+              "rotation": 45
+            },
+            {
+              "type": "Port",
+              "id": 5,
+              "rotation": 45
+            }
+          ]
+        },
+      "elements": [
+        {
+          "type": "Port",
+          "minVersion": "1.0",
+          "minNumber": "1",
+          "maxNumber": "1"
+        }
+      ],
+      "taskList": [
+        {
+          "seq": 99,
+          "taskType":"Elem",
+          "type": "Port",
+          "resultType":"Sync",
+          "setPayload": {
+            "task": "set"
+          }
+        },
+        {
+          "taskType":"Ctrl",
+          "type": "Repeat",
+          "seq": 1
+        }
+      ],
+      "endCondition": {
+        "type": "countSolved",
+        "condition": 10
+      },
+      "parameters": [
+        {
+          "name": "endCondition",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 10,
+              "maxValue": 1000
+            }
+          ]
+        },
+        {
+          "name": "timeout",
+          "type": "Int",
+          "validValues": [
+            {
+              "type": "numberType",
+              "minValue": 1000,
+              "maxValue": 10000
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

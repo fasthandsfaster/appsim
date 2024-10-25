@@ -1,0 +1,34 @@
+{
+    "exercise": {
+        "name": "",
+        "version": ""
+    },
+    "user": "",
+    "dateTime": "",
+    "parametersList": [
+        {
+            "name": "",
+            "value": ""
+        }
+    ],
+    "exercutionList": [
+        {
+            "type": "setElement",
+            "setMsg": {},
+            "setTime": "",
+            "replyMsg": {},
+            "replyTime": ""
+        },
+        {
+            "type": "activeElement",
+            "replyMsg": {},
+            "replyTime": ""
+        },
+        {
+            "type": "Control",
+            "replyMsg": {},
+            "replyTime": ""
+        },
+    ]
+
+}

@@ -1,0 +1,26 @@
+{
+    "1":{
+       "elementId":1,
+       "deviceId":"f4:12:fa:42:e3:14",
+       "type":"Port",
+       "hwVersion":"1.0",
+       "swVersion":"1.0",
+       "websocket":"w1"
+    },
+    "2":{
+       "elementId":2,
+       "deviceId":"f4:12:fa:42:ba:ec",
+       "type":"Port",
+       "hwVersion":"1.0",
+       "swVersion":"1.0",
+       "websocket":"w2"
+    },
+    "3":{
+       "elementId":3,
+       "deviceId":"f4:12:fa:44:6d:c0",
+       "type":"Port",
+       "hwVersion":"1.0",
+       "swVersion":"1.0",
+       "websocket":"w3"
+    }
+ }

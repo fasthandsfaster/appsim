@@ -1,0 +1,415 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="458" onload="init(evt)" viewBox="0 0 1200 458" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:"Verdana"; font-size:12px; fill:rgb(0,0,0); }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            var el = frames.children;
+            for(var i = 0; i < el.length; i++) {
+                update_text(el[i]);
+            }
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+            if (!isEdge) {
+                svg.removeAttribute("viewBox");
+            }
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (/^ *\$/.test(txt) || t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                update_text(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                update_text(e);
+            }
+        }
+    }
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+        update_text(el[i]);
+    }
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="458" fill="url(#background)"/><text id="title" x="50.0000%" y="24.00">py-spy record -o appsim_profile.svg /opt/homebrew/bin/python3 /Users/larshostruppedersen/motorskills/HockeyBar/pccode/appsim_asyncio/appsim.py</text><text id="details" x="10" y="40.00"> </text><text id="unzoom" class="hide" x="10" y="24.00">Reset Zoom</text><text id="search" x="1190" y="24.00">Search</text><text id="matched" x="1190" y="447.00"> </text><svg id="frames" x="10" width="1180" total_samples="3158"><g><title>_run_once (asyncio/base_events.py:1891) (4 samples, 0.13%)</title><rect x="0.4117%" y="148" width="0.1267%" height="15" fill="rgb(227,0,7)" fg:x="13" fg:w="4"/><text x="0.6617%" y="158.50"></text></g><g><title>_set_result_unless_cancelled (asyncio/futures.py:313) (9 samples, 0.28%)</title><rect x="1.5833%" y="180" width="0.2850%" height="15" fill="rgb(217,0,24)" fg:x="50" fg:w="9"/><text x="1.8333%" y="190.50"></text></g><g><title>call_soon (asyncio/base_events.py:751) (5 samples, 0.16%)</title><rect x="2.6282%" y="196" width="0.1583%" height="15" fill="rgb(221,193,54)" fg:x="83" fg:w="5"/><text x="2.8782%" y="206.50"></text></g><g><title>_check_closed (asyncio/base_events.py:517) (4 samples, 0.13%)</title><rect x="2.8499%" y="212" width="0.1267%" height="15" fill="rgb(248,212,6)" fg:x="90" fg:w="4"/><text x="3.0999%" y="222.50"></text></g><g><title>call_soon (asyncio/base_events.py:761) (8 samples, 0.25%)</title><rect x="2.7866%" y="196" width="0.2533%" height="15" fill="rgb(208,68,35)" fg:x="88" fg:w="8"/><text x="3.0366%" y="206.50"></text></g><g><title>_call_soon (asyncio/base_events.py:781) (37 samples, 1.17%)</title><rect x="3.2932%" y="212" width="1.1716%" height="15" fill="rgb(232,128,0)" fg:x="104" fg:w="37"/><text x="3.5432%" y="222.50"></text></g><g><title>__init__ (asyncio/events.py:44) (4 samples, 0.13%)</title><rect x="4.3382%" y="228" width="0.1267%" height="15" fill="rgb(207,160,47)" fg:x="137" fg:w="4"/><text x="4.5882%" y="238.50"></text></g><g><title>call_soon (asyncio/base_events.py:765) (51 samples, 1.61%)</title><rect x="3.0399%" y="196" width="1.6149%" height="15" fill="rgb(228,23,34)" fg:x="96" fg:w="51"/><text x="3.2899%" y="206.50"></text></g><g><title>_call_soon (asyncio/base_events.py:784) (5 samples, 0.16%)</title><rect x="4.4965%" y="212" width="0.1583%" height="15" fill="rgb(218,30,26)" fg:x="142" fg:w="5"/><text x="4.7465%" y="222.50"></text></g><g><title>_set_result_unless_cancelled (asyncio/futures.py:315) (90 samples, 2.85%)</title><rect x="1.8683%" y="180" width="2.8499%" height="15" fill="rgb(220,122,19)" fg:x="59" fg:w="90"/><text x="2.1183%" y="190.50">_s..</text></g><g><title>outbound_loop (connection.py:62) (4 samples, 0.13%)</title><rect x="4.8132%" y="180" width="0.1267%" height="15" fill="rgb(250,228,42)" fg:x="152" fg:w="4"/><text x="5.0632%" y="190.50"></text></g><g><title>start (gui.py:280) (22 samples, 0.70%)</title><rect x="4.9398%" y="180" width="0.6966%" height="15" fill="rgb(240,193,28)" fg:x="156" fg:w="22"/><text x="5.1898%" y="190.50"></text></g><g><title>start (gui.py:281) (37 samples, 1.17%)</title><rect x="5.6365%" y="180" width="1.1716%" height="15" fill="rgb(216,20,37)" fg:x="178" fg:w="37"/><text x="5.8865%" y="190.50"></text></g><g><title>start (gui.py:348) (10 samples, 0.32%)</title><rect x="6.8714%" y="180" width="0.3167%" height="15" fill="rgb(206,188,39)" fg:x="217" fg:w="10"/><text x="7.1214%" y="190.50"></text></g><g><title>start (gui.py:350) (42 samples, 1.33%)</title><rect x="7.1881%" y="180" width="1.3300%" height="15" fill="rgb(217,207,13)" fg:x="227" fg:w="42"/><text x="7.4381%" y="190.50"></text></g><g><title>start (gui.py:351) (47 samples, 1.49%)</title><rect x="8.5180%" y="180" width="1.4883%" height="15" fill="rgb(231,73,38)" fg:x="269" fg:w="47"/><text x="8.7680%" y="190.50"></text></g><g><title>process_events (pygame_gui/ui_manager.py:210) (5 samples, 0.16%)</title><rect x="10.0697%" y="196" width="0.1583%" height="15" fill="rgb(225,20,46)" fg:x="318" fg:w="5"/><text x="10.3197%" y="206.50"></text></g><g><title>process_events (pygame_gui/ui_manager.py:212) (7 samples, 0.22%)</title><rect x="10.2280%" y="196" width="0.2217%" height="15" fill="rgb(210,31,41)" fg:x="323" fg:w="7"/><text x="10.4780%" y="206.50"></text></g><g><title>&lt;listcomp&gt; (pygame_gui/ui_manager.py:213) (7 samples, 0.22%)</title><rect x="10.2280%" y="212" width="0.2217%" height="15" fill="rgb(221,200,47)" fg:x="323" fg:w="7"/><text x="10.4780%" y="222.50"></text></g><g><title>process_events (pygame_gui/ui_manager.py:219) (7 samples, 0.22%)</title><rect x="10.5130%" y="196" width="0.2217%" height="15" fill="rgb(226,26,5)" fg:x="332" fg:w="7"/><text x="10.7630%" y="206.50"></text></g><g><title>visible (pygame_gui/core/layered_gui_group.py:139) (6 samples, 0.19%)</title><rect x="10.5446%" y="212" width="0.1900%" height="15" fill="rgb(249,33,26)" fg:x="333" fg:w="6"/><text x="10.7946%" y="222.50"></text></g><g><title>process_events (pygame_gui/ui_manager.py:221) (4 samples, 0.13%)</title><rect x="10.7346%" y="196" width="0.1267%" height="15" fill="rgb(235,183,28)" fg:x="339" fg:w="4"/><text x="10.9846%" y="206.50"></text></g><g><title>start (gui.py:357) (36 samples, 1.14%)</title><rect x="10.0063%" y="180" width="1.1400%" height="15" fill="rgb(221,5,38)" fg:x="316" fg:w="36"/><text x="10.2563%" y="190.50"></text></g><g><title>process_events (pygame_gui/ui_manager.py:226) (9 samples, 0.28%)</title><rect x="10.8613%" y="196" width="0.2850%" height="15" fill="rgb(247,18,42)" fg:x="343" fg:w="9"/><text x="11.1113%" y="206.50"></text></g><g><title>_handle_dimensions (pygame_gui/core/text/text_line_chunk.py:104) (11 samples, 0.35%)</title><rect x="11.5896%" y="324" width="0.3483%" height="15" fill="rgb(241,131,45)" fg:x="366" fg:w="11"/><text x="11.8396%" y="334.50"></text></g><g><title>get_rect (pygame_gui/core/gui_font_freetype.py:59) (11 samples, 0.35%)</title><rect x="11.5896%" y="340" width="0.3483%" height="15" fill="rgb(249,31,29)" fg:x="366" fg:w="11"/><text x="11.8396%" y="350.50"></text></g><g><title>__init__ (pygame_gui/core/text/text_line_chunk.py:40) (25 samples, 0.79%)</title><rect x="11.5579%" y="308" width="0.7916%" height="15" fill="rgb(225,111,53)" fg:x="365" fg:w="25"/><text x="11.8079%" y="318.50"></text></g><g><title>_handle_dimensions (pygame_gui/core/text/text_line_chunk.py:109) (13 samples, 0.41%)</title><rect x="11.9379%" y="324" width="0.4117%" height="15" fill="rgb(238,160,17)" fg:x="377" fg:w="13"/><text x="12.1879%" y="334.50"></text></g><g><title>_text_render_width (pygame_gui/core/text/text_line_chunk.py:693) (13 samples, 0.41%)</title><rect x="11.9379%" y="340" width="0.4117%" height="15" fill="rgb(214,148,48)" fg:x="377" fg:w="13"/><text x="12.1879%" y="350.50"></text></g><g><title>get_metrics (pygame_gui/core/gui_font_freetype.py:62) (13 samples, 0.41%)</title><rect x="11.9379%" y="356" width="0.4117%" height="15" fill="rgb(232,36,49)" fg:x="377" fg:w="13"/><text x="12.1879%" y="366.50"></text></g><g><title>build_text_layout (pygame_gui/core/drawable_shapes/drawable_shape.py:518) (31 samples, 0.98%)</title><rect x="11.5263%" y="292" width="0.9816%" height="15" fill="rgb(209,103,24)" fg:x="364" fg:w="31"/><text x="11.7763%" y="302.50"></text></g><g><title>__init__ (pygame_gui/core/text/text_line_chunk.py:61) (4 samples, 0.13%)</title><rect x="12.3813%" y="308" width="0.1267%" height="15" fill="rgb(229,88,8)" fg:x="391" fg:w="4"/><text x="12.6313%" y="318.50"></text></g><g><title>_calc_font_padding (pygame_gui/core/text/text_line_chunk.py:127) (4 samples, 0.13%)</title><rect x="12.3813%" y="324" width="0.1267%" height="15" fill="rgb(213,181,19)" fg:x="391" fg:w="4"/><text x="12.6313%" y="334.50"></text></g><g><title>__init__ (pygame_gui/core/drawable_shapes/drawable_shape.py:169) (36 samples, 1.14%)</title><rect x="11.4630%" y="276" width="1.1400%" height="15" fill="rgb(254,191,54)" fg:x="362" fg:w="36"/><text x="11.7130%" y="286.50"></text></g><g><title>__init__ (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:30) (38 samples, 1.20%)</title><rect x="11.4630%" y="260" width="1.2033%" height="15" fill="rgb(241,83,37)" fg:x="362" fg:w="38"/><text x="11.7130%" y="270.50"></text></g><g><title>create_new_rectangle_shadow (pygame_gui/core/ui_shadow.py:184) (6 samples, 0.19%)</title><rect x="12.7612%" y="324" width="0.1900%" height="15" fill="rgb(233,36,39)" fg:x="403" fg:w="6"/><text x="13.0112%" y="334.50"></text></g><g><title>full_rebuild_on_size_change (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:73) (9 samples, 0.28%)</title><rect x="12.6979%" y="276" width="0.2850%" height="15" fill="rgb(226,3,54)" fg:x="401" fg:w="9"/><text x="12.9479%" y="286.50"></text></g><g><title>get_shadow (pygame_gui/ui_manager.py:164) (8 samples, 0.25%)</title><rect x="12.7296%" y="292" width="0.2533%" height="15" fill="rgb(245,192,40)" fg:x="402" fg:w="8"/><text x="12.9796%" y="302.50"></text></g><g><title>find_closest_shadow_scale_to_size (pygame_gui/core/ui_shadow.py:292) (8 samples, 0.25%)</title><rect x="12.7296%" y="308" width="0.2533%" height="15" fill="rgb(238,167,29)" fg:x="402" fg:w="8"/><text x="12.9796%" y="318.50"></text></g><g><title>finalise (pygame_gui/core/text/text_line_chunk.py:165) (15 samples, 0.47%)</title><rect x="13.2679%" y="388" width="0.4750%" height="15" fill="rgb(232,182,51)" fg:x="419" fg:w="15"/><text x="13.5179%" y="398.50"></text></g><g><title>_text_render_width (pygame_gui/core/text/text_line_chunk.py:693) (15 samples, 0.47%)</title><rect x="13.2679%" y="404" width="0.4750%" height="15" fill="rgb(231,60,39)" fg:x="419" fg:w="15"/><text x="13.5179%" y="414.50"></text></g><g><title>get_metrics (pygame_gui/core/gui_font_freetype.py:62) (15 samples, 0.47%)</title><rect x="13.2679%" y="420" width="0.4750%" height="15" fill="rgb(208,69,12)" fg:x="419" fg:w="15"/><text x="13.5179%" y="430.50"></text></g><g><title>_draw_text_no_gradient (pygame_gui/core/text/text_line_chunk.py:231) (8 samples, 0.25%)</title><rect x="13.7745%" y="404" width="0.2533%" height="15" fill="rgb(235,93,37)" fg:x="435" fg:w="8"/><text x="14.0245%" y="414.50"></text></g><g><title>render_premul_to (pygame_gui/core/gui_font_freetype.py:74) (8 samples, 0.25%)</title><rect x="13.7745%" y="420" width="0.2533%" height="15" fill="rgb(213,116,39)" fg:x="435" fg:w="8"/><text x="14.0245%" y="430.50"></text></g><g><title>__init__ (pygame_gui/elements/ui_button.py:135) (89 samples, 2.82%)</title><rect x="11.2413%" y="212" width="2.8182%" height="15" fill="rgb(222,207,29)" fg:x="355" fg:w="89"/><text x="11.4913%" y="222.50">__..</text></g><g><title>rebuild_from_changed_theme_data (pygame_gui/elements/ui_button.py:628) (83 samples, 2.63%)</title><rect x="11.4313%" y="228" width="2.6282%" height="15" fill="rgb(206,96,30)" fg:x="361" fg:w="83"/><text x="11.6813%" y="238.50">re..</text></g><g><title>rebuild (pygame_gui/elements/ui_button.py:721) (82 samples, 2.60%)</title><rect x="11.4630%" y="244" width="2.5966%" height="15" fill="rgb(218,138,4)" fg:x="362" fg:w="82"/><text x="11.7130%" y="254.50">re..</text></g><g><title>__init__ (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:34) (44 samples, 1.39%)</title><rect x="12.6662%" y="260" width="1.3933%" height="15" fill="rgb(250,191,14)" fg:x="400" fg:w="44"/><text x="12.9162%" y="270.50"></text></g><g><title>full_rebuild_on_size_change (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:98) (33 samples, 1.04%)</title><rect x="13.0146%" y="276" width="1.0450%" height="15" fill="rgb(239,60,40)" fg:x="411" fg:w="33"/><text x="13.2646%" y="286.50"></text></g><g><title>redraw_all_states (pygame_gui/core/drawable_shapes/drawable_shape.py:356) (33 samples, 1.04%)</title><rect x="13.0146%" y="292" width="1.0450%" height="15" fill="rgb(206,27,48)" fg:x="411" fg:w="33"/><text x="13.2646%" y="302.50"></text></g><g><title>redraw_state (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:241) (29 samples, 0.92%)</title><rect x="13.1412%" y="308" width="0.9183%" height="15" fill="rgb(225,35,8)" fg:x="415" fg:w="29"/><text x="13.3912%" y="318.50"></text></g><g><title>finalise_images_and_text (pygame_gui/core/drawable_shapes/drawable_shape.py:468) (29 samples, 0.92%)</title><rect x="13.1412%" y="324" width="0.9183%" height="15" fill="rgb(250,213,24)" fg:x="415" fg:w="29"/><text x="13.3912%" y="334.50"></text></g><g><title>finalise_text (pygame_gui/core/drawable_shapes/drawable_shape.py:574) (25 samples, 0.79%)</title><rect x="13.2679%" y="340" width="0.7916%" height="15" fill="rgb(247,123,22)" fg:x="419" fg:w="25"/><text x="13.5179%" y="350.50"></text></g><g><title>finalise_to_surf (pygame_gui/core/text/text_box_layout.py:368) (25 samples, 0.79%)</title><rect x="13.2679%" y="356" width="0.7916%" height="15" fill="rgb(231,138,38)" fg:x="419" fg:w="25"/><text x="13.5179%" y="366.50"></text></g><g><title>finalise (pygame_gui/core/text/text_box_layout_row.py:264) (25 samples, 0.79%)</title><rect x="13.2679%" y="372" width="0.7916%" height="15" fill="rgb(231,145,46)" fg:x="419" fg:w="25"/><text x="13.5179%" y="382.50"></text></g><g><title>finalise (pygame_gui/core/text/text_line_chunk.py:189) (9 samples, 0.28%)</title><rect x="13.7745%" y="388" width="0.2850%" height="15" fill="rgb(251,118,11)" fg:x="435" fg:w="9"/><text x="14.0245%" y="398.50"></text></g><g><title>__init__ (pygame_gui/core/ui_element.py:158) (4 samples, 0.13%)</title><rect x="14.1229%" y="228" width="0.1267%" height="15" fill="rgb(217,147,25)" fg:x="446" fg:w="4"/><text x="14.3729%" y="238.50"></text></g><g><title>_setup_container (pygame_gui/core/ui_element.py:272) (4 samples, 0.13%)</title><rect x="14.1229%" y="244" width="0.1267%" height="15" fill="rgb(247,81,37)" fg:x="446" fg:w="4"/><text x="14.3729%" y="254.50"></text></g><g><title>__init__ (pygame_gui/elements/ui_button.py:69) (13 samples, 0.41%)</title><rect x="14.0595%" y="212" width="0.4117%" height="15" fill="rgb(209,12,38)" fg:x="444" fg:w="13"/><text x="14.3095%" y="222.50"></text></g><g><title>update_exer_list (gui.py:264) (104 samples, 3.29%)</title><rect x="11.2096%" y="196" width="3.2932%" height="15" fill="rgb(227,1,9)" fg:x="354" fg:w="104"/><text x="11.4596%" y="206.50">upd..</text></g><g><title>start (gui.py:359) (107 samples, 3.39%)</title><rect x="11.1463%" y="180" width="3.3882%" height="15" fill="rgb(248,47,43)" fg:x="352" fg:w="107"/><text x="11.3963%" y="190.50">sta..</text></g><g><title>update (pygame_gui/ui_manager.py:255) (4 samples, 0.13%)</title><rect x="14.5345%" y="212" width="0.1267%" height="15" fill="rgb(221,10,30)" fg:x="459" fg:w="4"/><text x="14.7845%" y="222.50"></text></g><g><title>get_sprites_from_layer (pygame/sprite.py:1037) (6 samples, 0.19%)</title><rect x="14.9462%" y="244" width="0.1900%" height="15" fill="rgb(210,229,1)" fg:x="472" fg:w="6"/><text x="15.1962%" y="254.50"></text></g><g><title>get_sprites_from_layer (pygame/sprite.py:1038) (17 samples, 0.54%)</title><rect x="15.1362%" y="244" width="0.5383%" height="15" fill="rgb(222,148,37)" fg:x="478" fg:w="17"/><text x="15.3862%" y="254.50"></text></g><g><title>get_sprites_from_layer (pygame/sprite.py:1039) (22 samples, 0.70%)</title><rect x="15.6745%" y="244" width="0.6966%" height="15" fill="rgb(234,67,33)" fg:x="495" fg:w="22"/><text x="15.9245%" y="254.50"></text></g><g><title>_handle_hovering (pygame_gui/ui_manager.py:307) (51 samples, 1.61%)</title><rect x="14.8195%" y="228" width="1.6149%" height="15" fill="rgb(247,98,35)" fg:x="468" fg:w="51"/><text x="15.0695%" y="238.50"></text></g><g><title>visible (pygame_gui/core/layered_gui_group.py:133) (22 samples, 0.70%)</title><rect x="16.7828%" y="244" width="0.6966%" height="15" fill="rgb(247,138,52)" fg:x="530" fg:w="22"/><text x="17.0328%" y="254.50"></text></g><g><title>_get_visible (pygame_gui/core/layered_gui_group.py:121) (38 samples, 1.20%)</title><rect x="18.4294%" y="260" width="1.2033%" height="15" fill="rgb(213,79,30)" fg:x="582" fg:w="38"/><text x="18.6794%" y="270.50"></text></g><g><title>_handle_hovering (pygame_gui/ui_manager.py:308) (109 samples, 3.45%)</title><rect x="16.4345%" y="228" width="3.4516%" height="15" fill="rgb(246,177,23)" fg:x="519" fg:w="109"/><text x="16.6845%" y="238.50">_ha..</text></g><g><title>visible (pygame_gui/core/layered_gui_group.py:139) (76 samples, 2.41%)</title><rect x="17.4794%" y="244" width="2.4066%" height="15" fill="rgb(230,62,27)" fg:x="552" fg:w="76"/><text x="17.7294%" y="254.50">vi..</text></g><g><title>_get_visible (pygame_gui/core/layered_gui_group.py:123) (8 samples, 0.25%)</title><rect x="19.6327%" y="260" width="0.2533%" height="15" fill="rgb(216,154,8)" fg:x="620" fg:w="8"/><text x="19.8827%" y="270.50"></text></g><g><title>check_hover (pygame_gui/core/ui_element.py:772) (20 samples, 0.63%)</title><rect x="20.5193%" y="244" width="0.6333%" height="15" fill="rgb(244,35,45)" fg:x="648" fg:w="20"/><text x="20.7693%" y="254.50"></text></g><g><title>alive (pygame_gui/core/layered_gui_group.py:108) (14 samples, 0.44%)</title><rect x="21.4060%" y="260" width="0.4433%" height="15" fill="rgb(251,115,12)" fg:x="676" fg:w="14"/><text x="21.6560%" y="270.50"></text></g><g><title>check_hover (pygame_gui/core/ui_element.py:786) (80 samples, 2.53%)</title><rect x="21.1843%" y="244" width="2.5332%" height="15" fill="rgb(240,54,50)" fg:x="669" fg:w="80"/><text x="21.4343%" y="254.50">ch..</text></g><g><title>alive (pygame_gui/core/layered_gui_group.py:115) (59 samples, 1.87%)</title><rect x="21.8493%" y="260" width="1.8683%" height="15" fill="rgb(233,84,52)" fg:x="690" fg:w="59"/><text x="22.0993%" y="270.50">a..</text></g><g><title>get_mouse_position (pygame_gui/ui_manager.py:321) (16 samples, 0.51%)</title><rect x="24.3825%" y="260" width="0.5066%" height="15" fill="rgb(207,117,47)" fg:x="770" fg:w="16"/><text x="24.6325%" y="270.50"></text></g><g><title>check_hover (pygame_gui/core/ui_element.py:787) (53 samples, 1.68%)</title><rect x="23.7175%" y="244" width="1.6783%" height="15" fill="rgb(249,43,39)" fg:x="749" fg:w="53"/><text x="23.9675%" y="254.50"></text></g><g><title>get_mouse_position (pygame_gui/ui_manager.py:325) (16 samples, 0.51%)</title><rect x="24.8892%" y="260" width="0.5066%" height="15" fill="rgb(209,38,44)" fg:x="786" fg:w="16"/><text x="25.1392%" y="270.50"></text></g><g><title>check_hover (pygame_gui/core/ui_element.py:788) (41 samples, 1.30%)</title><rect x="25.3958%" y="244" width="1.2983%" height="15" fill="rgb(236,212,23)" fg:x="802" fg:w="41"/><text x="25.6458%" y="254.50"></text></g><g><title>hover_point (pygame_gui/elements/ui_button.py:198) (20 samples, 0.63%)</title><rect x="27.1374%" y="260" width="0.6333%" height="15" fill="rgb(242,79,21)" fg:x="857" fg:w="20"/><text x="27.3874%" y="270.50"></text></g><g><title>hover_point (pygame_gui/elements/ui_button.py:211) (15 samples, 0.47%)</title><rect x="27.7707%" y="260" width="0.4750%" height="15" fill="rgb(211,96,35)" fg:x="877" fg:w="15"/><text x="28.0207%" y="270.50"></text></g><g><title>hover_point (pygame_gui/core/ui_element.py:864) (11 samples, 0.35%)</title><rect x="29.6707%" y="276" width="0.3483%" height="15" fill="rgb(253,215,40)" fg:x="937" fg:w="11"/><text x="29.9207%" y="286.50"></text></g><g><title>get_rect (pygame_gui/core/ui_container.py:67) (15 samples, 0.47%)</title><rect x="31.6973%" y="292" width="0.4750%" height="15" fill="rgb(211,81,21)" fg:x="1001" fg:w="15"/><text x="31.9473%" y="302.50"></text></g><g><title>rect (pygame_gui/core/layered_gui_group.py:193) (21 samples, 0.66%)</title><rect x="32.9639%" y="308" width="0.6650%" height="15" fill="rgb(208,190,38)" fg:x="1041" fg:w="21"/><text x="33.2139%" y="318.50"></text></g><g><title>hover_point (pygame_gui/core/ui_element.py:878) (129 samples, 4.08%)</title><rect x="30.0190%" y="276" width="4.0849%" height="15" fill="rgb(235,213,38)" fg:x="948" fg:w="129"/><text x="30.2690%" y="286.50">hove..</text></g><g><title>get_rect (pygame_gui/core/ui_container.py:73) (61 samples, 1.93%)</title><rect x="32.1723%" y="292" width="1.9316%" height="15" fill="rgb(237,122,38)" fg:x="1016" fg:w="61"/><text x="32.4223%" y="302.50">g..</text></g><g><title>rect (pygame_gui/core/layered_gui_group.py:202) (15 samples, 0.47%)</title><rect x="33.6289%" y="308" width="0.4750%" height="15" fill="rgb(244,218,35)" fg:x="1062" fg:w="15"/><text x="33.8789%" y="318.50"></text></g><g><title>get_image_clipping_rect (pygame_gui/core/ui_element.py:1017) (21 samples, 0.66%)</title><rect x="34.7688%" y="292" width="0.6650%" height="15" fill="rgb(240,68,47)" fg:x="1098" fg:w="21"/><text x="35.0188%" y="302.50"></text></g><g><title>hover_point (pygame_gui/core/ui_element.py:879) (54 samples, 1.71%)</title><rect x="34.1039%" y="276" width="1.7099%" height="15" fill="rgb(210,16,53)" fg:x="1077" fg:w="54"/><text x="34.3539%" y="286.50"></text></g><g><title>get_image_clipping_rect (pygame_gui/core/ui_element.py:1024) (12 samples, 0.38%)</title><rect x="35.4338%" y="292" width="0.3800%" height="15" fill="rgb(235,124,12)" fg:x="1119" fg:w="12"/><text x="35.6838%" y="302.50"></text></g><g><title>hover_point (pygame_gui/core/ui_element.py:884) (4 samples, 0.13%)</title><rect x="35.8138%" y="276" width="0.1267%" height="15" fill="rgb(224,169,11)" fg:x="1131" fg:w="4"/><text x="36.0638%" y="286.50"></text></g><g><title>collide_point (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:100) (30 samples, 0.95%)</title><rect x="37.0804%" y="292" width="0.9500%" height="15" fill="rgb(250,166,2)" fg:x="1171" fg:w="30"/><text x="37.3304%" y="302.50"></text></g><g><title>hover_point (pygame_gui/core/ui_element.py:885) (172 samples, 5.45%)</title><rect x="35.9405%" y="276" width="5.4465%" height="15" fill="rgb(242,216,29)" fg:x="1135" fg:w="172"/><text x="36.1905%" y="286.50">hover_p..</text></g><g><title>collide_point (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:111) (106 samples, 3.36%)</title><rect x="38.0304%" y="292" width="3.3566%" height="15" fill="rgb(230,116,27)" fg:x="1201" fg:w="106"/><text x="38.2804%" y="302.50">col..</text></g><g><title>check_hover (pygame_gui/core/ui_element.py:790) (471 samples, 14.91%)</title><rect x="26.6941%" y="244" width="14.9145%" height="15" fill="rgb(228,99,48)" fg:x="843" fg:w="471"/><text x="26.9441%" y="254.50">check_hover (pygame_gui..</text></g><g><title>hover_point (pygame_gui/elements/ui_button.py:214) (420 samples, 13.30%)</title><rect x="28.3091%" y="260" width="13.2996%" height="15" fill="rgb(253,11,6)" fg:x="894" fg:w="420"/><text x="28.5591%" y="270.50">hover_point (pygame_..</text></g><g><title>hover_point (pygame_gui/core/ui_element.py:886) (7 samples, 0.22%)</title><rect x="41.3870%" y="276" width="0.2217%" height="15" fill="rgb(247,143,39)" fg:x="1307" fg:w="7"/><text x="41.6370%" y="286.50"></text></g><g><title>check_hover (pygame_gui/core/ui_element.py:805) (6 samples, 0.19%)</title><rect x="41.6403%" y="244" width="0.1900%" height="15" fill="rgb(236,97,10)" fg:x="1315" fg:w="6"/><text x="41.8903%" y="254.50"></text></g><g><title>check_hover (pygame_gui/core/ui_element.py:810) (10 samples, 0.32%)</title><rect x="41.8936%" y="244" width="0.3167%" height="15" fill="rgb(233,208,19)" fg:x="1323" fg:w="10"/><text x="42.1436%" y="254.50"></text></g><g><title>_handle_hovering (pygame_gui/ui_manager.py:312) (706 samples, 22.36%)</title><rect x="19.8860%" y="228" width="22.3559%" height="15" fill="rgb(216,164,2)" fg:x="628" fg:w="706"/><text x="20.1360%" y="238.50">_handle_hovering (pygame_gui/ui_man..</text></g><g><title>update (pygame_gui/ui_manager.py:266) (876 samples, 27.74%)</title><rect x="14.7245%" y="212" width="27.7391%" height="15" fill="rgb(220,129,5)" fg:x="465" fg:w="876"/><text x="14.9745%" y="222.50">update (pygame_gui/ui_manager.py:266)</text></g><g><title>update (pygame/sprite.py:554) (4 samples, 0.13%)</title><rect x="42.4636%" y="244" width="0.1267%" height="15" fill="rgb(242,17,10)" fg:x="1341" fg:w="4"/><text x="42.7136%" y="254.50"></text></g><g><title>update (pygame_gui/elements/ui_button.py:279) (21 samples, 0.66%)</title><rect x="44.0469%" y="260" width="0.6650%" height="15" fill="rgb(242,107,0)" fg:x="1391" fg:w="21"/><text x="44.2969%" y="270.50"></text></g><g><title>update (pygame_gui/core/ui_element.py:739) (14 samples, 0.44%)</title><rect x="45.6301%" y="276" width="0.4433%" height="15" fill="rgb(251,28,31)" fg:x="1441" fg:w="14"/><text x="45.8801%" y="286.50"></text></g><g><title>alive (pygame_gui/core/layered_gui_group.py:108) (14 samples, 0.44%)</title><rect x="46.9284%" y="292" width="0.4433%" height="15" fill="rgb(233,223,10)" fg:x="1482" fg:w="14"/><text x="47.1784%" y="302.50"></text></g><g><title>update (pygame_gui/core/ui_element.py:746) (84 samples, 2.66%)</title><rect x="46.0735%" y="276" width="2.6599%" height="15" fill="rgb(215,21,27)" fg:x="1455" fg:w="84"/><text x="46.3235%" y="286.50">up..</text></g><g><title>alive (pygame_gui/core/layered_gui_group.py:115) (43 samples, 1.36%)</title><rect x="47.3718%" y="292" width="1.3616%" height="15" fill="rgb(232,23,21)" fg:x="1496" fg:w="43"/><text x="47.6218%" y="302.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:299) (12 samples, 0.38%)</title><rect x="49.4617%" y="292" width="0.3800%" height="15" fill="rgb(244,5,23)" fg:x="1562" fg:w="12"/><text x="49.7117%" y="302.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:306) (52 samples, 1.65%)</title><rect x="49.8417%" y="292" width="1.6466%" height="15" fill="rgb(226,81,46)" fg:x="1574" fg:w="52"/><text x="50.0917%" y="302.50"></text></g><g><title>redraw_state (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:167) (8 samples, 0.25%)</title><rect x="51.5833%" y="308" width="0.2533%" height="15" fill="rgb(247,70,30)" fg:x="1629" fg:w="8"/><text x="51.8333%" y="318.50"></text></g><g><title>redraw_state (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:175) (7 samples, 0.22%)</title><rect x="51.8683%" y="308" width="0.2217%" height="15" fill="rgb(212,68,19)" fg:x="1638" fg:w="7"/><text x="52.1183%" y="318.50"></text></g><g><title>finalise_text (pygame_gui/core/drawable_shapes/drawable_shape.py:559) (5 samples, 0.16%)</title><rect x="52.1216%" y="340" width="0.1583%" height="15" fill="rgb(240,187,13)" fg:x="1646" fg:w="5"/><text x="52.3716%" y="350.50"></text></g><g><title>finalise_text (pygame_gui/core/drawable_shapes/drawable_shape.py:562) (5 samples, 0.16%)</title><rect x="52.3433%" y="340" width="0.1583%" height="15" fill="rgb(223,113,26)" fg:x="1653" fg:w="5"/><text x="52.5933%" y="350.50"></text></g><g><title>finalise (pygame_gui/core/text/text_line_chunk.py:165) (93 samples, 2.94%)</title><rect x="52.7232%" y="388" width="2.9449%" height="15" fill="rgb(206,192,2)" fg:x="1665" fg:w="93"/><text x="52.9732%" y="398.50">fi..</text></g><g><title>_text_render_width (pygame_gui/core/text/text_line_chunk.py:693) (90 samples, 2.85%)</title><rect x="52.8182%" y="404" width="2.8499%" height="15" fill="rgb(241,108,4)" fg:x="1668" fg:w="90"/><text x="53.0682%" y="414.50">_t..</text></g><g><title>get_metrics (pygame_gui/core/gui_font_freetype.py:62) (89 samples, 2.82%)</title><rect x="52.8499%" y="420" width="2.8182%" height="15" fill="rgb(247,173,49)" fg:x="1669" fg:w="89"/><text x="53.0999%" y="430.50">ge..</text></g><g><title>render_premul_to (pygame_gui/core/gui_font_freetype.py:74) (57 samples, 1.80%)</title><rect x="55.8581%" y="420" width="1.8049%" height="15" fill="rgb(224,114,35)" fg:x="1764" fg:w="57"/><text x="56.1081%" y="430.50">r..</text></g><g><title>_draw_text_no_gradient (pygame_gui/core/text/text_line_chunk.py:231) (64 samples, 2.03%)</title><rect x="55.7631%" y="404" width="2.0266%" height="15" fill="rgb(245,159,27)" fg:x="1761" fg:w="64"/><text x="56.0131%" y="414.50">_..</text></g><g><title>finalise (pygame_gui/core/text/text_line_chunk.py:189) (74 samples, 2.34%)</title><rect x="55.7631%" y="388" width="2.3433%" height="15" fill="rgb(245,172,44)" fg:x="1761" fg:w="74"/><text x="56.0131%" y="398.50">f..</text></g><g><title>finalise (pygame_gui/core/text/text_line_chunk.py:193) (4 samples, 0.13%)</title><rect x="58.1064%" y="388" width="0.1267%" height="15" fill="rgb(236,23,11)" fg:x="1835" fg:w="4"/><text x="58.3564%" y="398.50"></text></g><g><title>finalise_text (pygame_gui/core/drawable_shapes/drawable_shape.py:574) (178 samples, 5.64%)</title><rect x="52.6282%" y="340" width="5.6365%" height="15" fill="rgb(205,117,38)" fg:x="1662" fg:w="178"/><text x="52.8782%" y="350.50">finalis..</text></g><g><title>finalise_to_surf (pygame_gui/core/text/text_box_layout.py:368) (178 samples, 5.64%)</title><rect x="52.6282%" y="356" width="5.6365%" height="15" fill="rgb(237,72,25)" fg:x="1662" fg:w="178"/><text x="52.8782%" y="366.50">finalis..</text></g><g><title>finalise (pygame_gui/core/text/text_box_layout_row.py:264) (175 samples, 5.54%)</title><rect x="52.7232%" y="372" width="5.5415%" height="15" fill="rgb(244,70,9)" fg:x="1665" fg:w="175"/><text x="52.9732%" y="382.50">finalis..</text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:308) (223 samples, 7.06%)</title><rect x="51.4883%" y="292" width="7.0614%" height="15" fill="rgb(217,125,39)" fg:x="1626" fg:w="223"/><text x="51.7383%" y="302.50">update (p..</text></g><g><title>redraw_state (pygame_gui/core/drawable_shapes/rect_drawable_shape.py:241) (204 samples, 6.46%)</title><rect x="52.0899%" y="308" width="6.4598%" height="15" fill="rgb(235,36,10)" fg:x="1645" fg:w="204"/><text x="52.3399%" y="318.50">redraw_s..</text></g><g><title>finalise_images_and_text (pygame_gui/core/drawable_shapes/drawable_shape.py:468) (204 samples, 6.46%)</title><rect x="52.0899%" y="324" width="6.4598%" height="15" fill="rgb(251,123,47)" fg:x="1645" fg:w="204"/><text x="52.3399%" y="334.50">finalise..</text></g><g><title>finalise_text (pygame_gui/core/drawable_shapes/drawable_shape.py:575) (9 samples, 0.28%)</title><rect x="58.2647%" y="340" width="0.2850%" height="15" fill="rgb(221,13,13)" fg:x="1840" fg:w="9"/><text x="58.5147%" y="350.50"></text></g><g><title>basic_blit (pygame_gui/core/utility.py:307) (8 samples, 0.25%)</title><rect x="58.2964%" y="356" width="0.2533%" height="15" fill="rgb(238,131,9)" fg:x="1841" fg:w="8"/><text x="58.5464%" y="366.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:309) (11 samples, 0.35%)</title><rect x="58.5497%" y="292" width="0.3483%" height="15" fill="rgb(211,50,8)" fg:x="1849" fg:w="11"/><text x="58.7997%" y="302.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:314) (8 samples, 0.25%)</title><rect x="58.9614%" y="292" width="0.2533%" height="15" fill="rgb(245,182,24)" fg:x="1862" fg:w="8"/><text x="59.2114%" y="302.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:317) (7 samples, 0.22%)</title><rect x="59.2780%" y="292" width="0.2217%" height="15" fill="rgb(242,14,37)" fg:x="1872" fg:w="7"/><text x="59.5280%" y="302.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:50) (16 samples, 0.51%)</title><rect x="60.5763%" y="308" width="0.5066%" height="15" fill="rgb(246,228,12)" fg:x="1913" fg:w="16"/><text x="60.8263%" y="318.50"></text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:57) (20 samples, 0.63%)</title><rect x="61.0830%" y="308" width="0.6333%" height="15" fill="rgb(213,55,15)" fg:x="1929" fg:w="20"/><text x="61.3330%" y="318.50"></text></g><g><title>update (pygame_gui/core/ui_element.py:747) (411 samples, 13.01%)</title><rect x="48.7334%" y="276" width="13.0146%" height="15" fill="rgb(209,9,3)" fg:x="1539" fg:w="411"/><text x="48.9834%" y="286.50">update (pygame_gui/c..</text></g><g><title>update (pygame_gui/core/drawable_shapes/drawable_shape.py:320) (70 samples, 2.22%)</title><rect x="59.5313%" y="292" width="2.2166%" height="15" fill="rgb(230,59,30)" fg:x="1880" fg:w="70"/><text x="59.7813%" y="302.50">u..</text></g><g><title>has_fresh_surface (pygame_gui/core/drawable_shapes/drawable_shape.py:428) (17 samples, 0.54%)</title><rect x="62.6346%" y="292" width="0.5383%" height="15" fill="rgb(209,121,21)" fg:x="1978" fg:w="17"/><text x="62.8846%" y="302.50"></text></g><g><title>update (pygame_gui/elements/ui_button.py:286) (598 samples, 18.94%)</title><rect x="44.7118%" y="260" width="18.9360%" height="15" fill="rgb(220,109,13)" fg:x="1412" fg:w="598"/><text x="44.9618%" y="270.50">update (pygame_gui/elements/ui..</text></g><g><title>update (pygame_gui/core/ui_element.py:748) (60 samples, 1.90%)</title><rect x="61.7479%" y="276" width="1.8999%" height="15" fill="rgb(232,18,1)" fg:x="1950" fg:w="60"/><text x="61.9979%" y="286.50">u..</text></g><g><title>has_fresh_surface (pygame_gui/core/drawable_shapes/drawable_shape.py:437) (15 samples, 0.47%)</title><rect x="63.1729%" y="292" width="0.4750%" height="15" fill="rgb(215,41,42)" fg:x="1995" fg:w="15"/><text x="63.4229%" y="302.50"></text></g><g><title>alive (pygame_gui/core/layered_gui_group.py:108) (13 samples, 0.41%)</title><rect x="63.9329%" y="276" width="0.4117%" height="15" fill="rgb(224,123,36)" fg:x="2019" fg:w="13"/><text x="64.1829%" y="286.50"></text></g><g><title>update (pygame_gui/elements/ui_button.py:287) (49 samples, 1.55%)</title><rect x="63.6479%" y="260" width="1.5516%" height="15" fill="rgb(240,125,3)" fg:x="2010" fg:w="49"/><text x="63.8979%" y="270.50"></text></g><g><title>alive (pygame_gui/core/layered_gui_group.py:115) (27 samples, 0.85%)</title><rect x="64.3445%" y="276" width="0.8550%" height="15" fill="rgb(205,98,50)" fg:x="2032" fg:w="27"/><text x="64.5945%" y="286.50"></text></g><g><title>update (pygame_gui/elements/ui_button.py:289) (12 samples, 0.38%)</title><rect x="65.1995%" y="260" width="0.3800%" height="15" fill="rgb(205,185,37)" fg:x="2059" fg:w="12"/><text x="65.4495%" y="270.50"></text></g><g><title>update (pygame_gui/elements/ui_button.py:296) (22 samples, 0.70%)</title><rect x="65.7378%" y="260" width="0.6966%" height="15" fill="rgb(238,207,15)" fg:x="2076" fg:w="22"/><text x="65.9878%" y="270.50"></text></g><g><title>update (pygame_gui/core/layered_gui_group.py:272) (759 samples, 24.03%)</title><rect x="42.4636%" y="228" width="24.0342%" height="15" fill="rgb(213,199,42)" fg:x="1341" fg:w="759"/><text x="42.7136%" y="238.50">update (pygame_gui/core/layered_gui_gr..</text></g><g><title>update (pygame/sprite.py:555) (755 samples, 23.91%)</title><rect x="42.5902%" y="244" width="23.9075%" height="15" fill="rgb(235,201,11)" fg:x="1345" fg:w="755"/><text x="42.8402%" y="254.50">update (pygame/sprite.py:555)</text></g><g><title>&lt;listcomp&gt; (pygame_gui/core/layered_gui_group.py:283) (14 samples, 0.44%)</title><rect x="66.5294%" y="260" width="0.4433%" height="15" fill="rgb(207,46,11)" fg:x="2101" fg:w="14"/><text x="66.7794%" y="270.50"></text></g><g><title>image (pygame_gui/core/layered_gui_group.py:171) (25 samples, 0.79%)</title><rect x="67.8594%" y="276" width="0.7916%" height="15" fill="rgb(241,35,35)" fg:x="2143" fg:w="25"/><text x="68.1094%" y="286.50"></text></g><g><title>image (pygame_gui/core/layered_gui_group.py:180) (42 samples, 1.33%)</title><rect x="68.6510%" y="276" width="1.3300%" height="15" fill="rgb(243,32,47)" fg:x="2168" fg:w="42"/><text x="68.9010%" y="286.50"></text></g><g><title>visible (pygame_gui/core/layered_gui_group.py:133) (18 samples, 0.57%)</title><rect x="69.9810%" y="276" width="0.5700%" height="15" fill="rgb(247,202,23)" fg:x="2210" fg:w="18"/><text x="70.2310%" y="286.50"></text></g><g><title>_get_visible (pygame_gui/core/layered_gui_group.py:121) (14 samples, 0.44%)</title><rect x="71.3743%" y="292" width="0.4433%" height="15" fill="rgb(219,102,11)" fg:x="2254" fg:w="14"/><text x="71.6243%" y="302.50"></text></g><g><title>start (gui.py:361) (1,823 samples, 57.73%)</title><rect x="14.5345%" y="180" width="57.7264%" height="15" fill="rgb(243,110,44)" fg:x="459" fg:w="1823"/><text x="14.7845%" y="190.50">start (gui.py:361)</text></g><g><title>update (gui.py:73) (1,823 samples, 57.73%)</title><rect x="14.5345%" y="196" width="57.7264%" height="15" fill="rgb(222,74,54)" fg:x="459" fg:w="1823"/><text x="14.7845%" y="206.50">update (gui.py:73)</text></g><g><title>update (pygame_gui/ui_manager.py:270) (941 samples, 29.80%)</title><rect x="42.4636%" y="212" width="29.7973%" height="15" fill="rgb(216,99,12)" fg:x="1341" fg:w="941"/><text x="42.7136%" y="222.50">update (pygame_gui/ui_manager.py:270)</text></g><g><title>update (pygame_gui/core/layered_gui_group.py:275) (182 samples, 5.76%)</title><rect x="66.4978%" y="228" width="5.7631%" height="15" fill="rgb(226,22,26)" fg:x="2100" fg:w="182"/><text x="66.7478%" y="238.50">update ..</text></g><g><title>update_visibility (pygame_gui/core/layered_gui_group.py:283) (182 samples, 5.76%)</title><rect x="66.4978%" y="244" width="5.7631%" height="15" fill="rgb(217,163,10)" fg:x="2100" fg:w="182"/><text x="66.7478%" y="254.50">update_..</text></g><g><title>&lt;listcomp&gt; (pygame_gui/core/layered_gui_group.py:285) (165 samples, 5.22%)</title><rect x="67.0361%" y="260" width="5.2248%" height="15" fill="rgb(213,25,53)" fg:x="2117" fg:w="165"/><text x="67.2861%" y="270.50">&lt;listc..</text></g><g><title>visible (pygame_gui/core/layered_gui_group.py:139) (54 samples, 1.71%)</title><rect x="70.5510%" y="276" width="1.7099%" height="15" fill="rgb(252,105,26)" fg:x="2228" fg:w="54"/><text x="70.8010%" y="286.50"></text></g><g><title>_get_visible (pygame_gui/core/layered_gui_group.py:123) (14 samples, 0.44%)</title><rect x="71.8176%" y="292" width="0.4433%" height="15" fill="rgb(220,39,43)" fg:x="2268" fg:w="14"/><text x="72.0676%" y="302.50"></text></g><g><title>draw (gui.py:76) (12 samples, 0.38%)</title><rect x="72.2609%" y="196" width="0.3800%" height="15" fill="rgb(229,68,48)" fg:x="2282" fg:w="12"/><text x="72.5109%" y="206.50"></text></g><g><title>draw (gui.py:84) (7 samples, 0.22%)</title><rect x="72.6409%" y="196" width="0.2217%" height="15" fill="rgb(252,8,32)" fg:x="2294" fg:w="7"/><text x="72.8909%" y="206.50"></text></g><g><title>draw_scoreboard (gui.py:214) (6 samples, 0.19%)</title><rect x="72.6726%" y="212" width="0.1900%" height="15" fill="rgb(223,20,43)" fg:x="2295" fg:w="6"/><text x="72.9226%" y="222.50"></text></g><g><title>draw (gui.py:86) (559 samples, 17.70%)</title><rect x="72.8626%" y="196" width="17.7011%" height="15" fill="rgb(229,81,49)" fg:x="2301" fg:w="559"/><text x="73.1126%" y="206.50">draw (gui.py:86)</text></g><g><title>draw_ui (pygame_gui/ui_manager.py:339) (559 samples, 17.70%)</title><rect x="72.8626%" y="212" width="17.7011%" height="15" fill="rgb(236,28,36)" fg:x="2301" fg:w="559"/><text x="73.1126%" y="222.50">draw_ui (pygame_gui/ui_manag..</text></g><g><title>draw (pygame_gui/core/layered_gui_group.py:269) (559 samples, 17.70%)</title><rect x="72.8626%" y="228" width="17.7011%" height="15" fill="rgb(249,185,26)" fg:x="2301" fg:w="559"/><text x="73.1126%" y="238.50">draw (pygame_gui/core/layere..</text></g><g><title>start (gui.py:362) (703 samples, 22.26%)</title><rect x="72.2609%" y="180" width="22.2609%" height="15" fill="rgb(249,174,33)" fg:x="2282" fg:w="703"/><text x="72.5109%" y="190.50">start (gui.py:362)</text></g><g><title>draw (gui.py:87) (125 samples, 3.96%)</title><rect x="90.5636%" y="196" width="3.9582%" height="15" fill="rgb(233,201,37)" fg:x="2860" fg:w="125"/><text x="90.8136%" y="206.50">draw..</text></g><g><title>start (gui.py:365) (150 samples, 4.75%)</title><rect x="94.5218%" y="180" width="4.7498%" height="15" fill="rgb(221,78,26)" fg:x="2985" fg:w="150"/><text x="94.7718%" y="190.50">start ..</text></g><g><title>start (gui.py:372) (19 samples, 0.60%)</title><rect x="99.2717%" y="180" width="0.6016%" height="15" fill="rgb(250,127,30)" fg:x="3135" fg:w="19"/><text x="99.5217%" y="190.50"></text></g><g><title>sleep (asyncio/tasks.py:641) (13 samples, 0.41%)</title><rect x="99.4617%" y="196" width="0.4117%" height="15" fill="rgb(230,49,44)" fg:x="3141" fg:w="13"/><text x="99.7117%" y="206.50"></text></g><g><title>cancel (asyncio/events.py:150) (6 samples, 0.19%)</title><rect x="99.6833%" y="212" width="0.1900%" height="15" fill="rgb(229,67,23)" fg:x="3148" fg:w="6"/><text x="99.9333%" y="222.50"></text></g><g><title>_run (asyncio/events.py:80) (3,127 samples, 99.02%)</title><rect x="0.8866%" y="164" width="99.0184%" height="15" fill="rgb(249,83,47)" fg:x="28" fg:w="3127"/><text x="1.1366%" y="174.50">_run (asyncio/events.py:80)</text></g><g><title>all (3,158 samples, 100%)</title><rect x="0.0000%" y="52" width="100.0000%" height="15" fill="rgb(215,43,3)" fg:x="0" fg:w="3158"/><text x="0.2500%" y="62.50"></text></g><g><title>&lt;module&gt; (appsim.py:51) (3,158 samples, 100.00%)</title><rect x="0.0000%" y="68" width="100.0000%" height="15" fill="rgb(238,154,13)" fg:x="0" fg:w="3158"/><text x="0.2500%" y="78.50">&lt;module&gt; (appsim.py:51)</text></g><g><title>run (asyncio/runners.py:190) (3,158 samples, 100.00%)</title><rect x="0.0000%" y="84" width="100.0000%" height="15" fill="rgb(219,56,2)" fg:x="0" fg:w="3158"/><text x="0.2500%" y="94.50">run (asyncio/runners.py:190)</text></g><g><title>run (asyncio/runners.py:118) (3,158 samples, 100.00%)</title><rect x="0.0000%" y="100" width="100.0000%" height="15" fill="rgb(233,0,4)" fg:x="0" fg:w="3158"/><text x="0.2500%" y="110.50">run (asyncio/runners.py:118)</text></g><g><title>run_until_complete (asyncio/base_events.py:640) (3,158 samples, 100.00%)</title><rect x="0.0000%" y="116" width="100.0000%" height="15" fill="rgb(235,30,7)" fg:x="0" fg:w="3158"/><text x="0.2500%" y="126.50">run_until_complete (asyncio/base_events.py:640)</text></g><g><title>run_forever (asyncio/base_events.py:607) (3,158 samples, 100.00%)</title><rect x="0.0000%" y="132" width="100.0000%" height="15" fill="rgb(250,79,13)" fg:x="0" fg:w="3158"/><text x="0.2500%" y="142.50">run_forever (asyncio/base_events.py:607)</text></g><g><title>_run_once (asyncio/base_events.py:1922) (3,134 samples, 99.24%)</title><rect x="0.7600%" y="148" width="99.2400%" height="15" fill="rgb(211,146,34)" fg:x="24" fg:w="3134"/><text x="1.0100%" y="158.50">_run_once (asyncio/base_events.py:1922)</text></g></svg></svg>
